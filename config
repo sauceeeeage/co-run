@@ -1,0 +1,2 @@
+cmd, real path, range, args
+make PolyBenchC-4.2.1/linear-algebra/blas/gemm/ 500-5000 -C PolyBenchC-4.2.1/linear-algebra/blas/gemm/ run N=*
