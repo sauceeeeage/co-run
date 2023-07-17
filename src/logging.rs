@@ -1,6 +1,5 @@
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
-use std::ffi::c_uchar;
 use std::fs::File;
 use std::io::Write;
 use tracing::{info, trace};
@@ -48,7 +47,6 @@ pub fn logging(
         }
         1 => {
             // 1 for finish
-
             trace!(
                 "program {:?}(prog_id: {:?}) finished with {:?} args at {:?} time, used {:?} sec",
                 curr_prog_log.prog_name,

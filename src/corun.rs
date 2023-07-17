@@ -1,17 +1,18 @@
 use std::collections::HashMap;
-use std::fs::{File, OpenOptions};
-use std::io::Write;
+use std::fs::File;
+// use std::io::Write;
 use std::path::PathBuf;
 // use clap::error::ContextValue::String;
 use std::string::String;
-use std::sync::Mutex;
+// use std::sync::Mutex;
 use std::thread::{self};
 use std::time;
 
+// use anyhow::Error;
 use chrono::Utc;
 use rand::Rng;
 use regex::Regex;
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, warn};
 
 use crate::logging::{logging, Log};
 
@@ -34,12 +35,8 @@ pub fn co_run(
     programs: Vec<Program>,
     total_dur: time::Duration,
     cpu_cnt: usize,
+    log_file: &mut Result<File, std::io::Error>,
 ) -> HashMap<u32, time::Duration> {
-    let mut log_file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .open("log");
     let mut timer = HashMap::new();
     let mut children = Vec::new();
     let mut logger = HashMap::new();
@@ -66,7 +63,7 @@ pub fn co_run(
                 .get(0)
                 .unwrap()
                 .as_str()
-                .replace("/", "")
+                .replace('/', "")
                 .to_string();
             let log = Log {
                 start: human_start,
@@ -183,7 +180,7 @@ fn single_run(program: &mut Program) -> std::process::Child {
         let rand =
             rand::thread_rng().gen_range(program.range.unwrap().0..=program.range.unwrap().1);
         *str = re
-            .replace_all(&str, format!("={}", rand).as_str())
+            .replace_all(str, format!("={}", rand).as_str())
             .to_string();
 
         // println!("{}", str);

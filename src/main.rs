@@ -2,10 +2,11 @@
 
 use clap::Parser;
 
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::PathBuf;
 use tracing::Level;
-use tracing_subscriber::fmt::writer::MakeWriterExt;
+// use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 // use tracing_subscriber::prelude::*;
 mod corun;
@@ -66,9 +67,14 @@ fn main() -> anyhow::Result<()> {
         .finish();
     // use that subscriber to process traces emitted after this point
     tracing::subscriber::set_global_default(subscriber)?;
-    // let cpu_info = utils::get_cpu_info();
-    let cpu_info = 4;
+    let cpu_info = utils::get_cpu_info();
+    // let cpu_info = 4;
     let command: Command = Command::parse();
+    let mut log_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open("log");
     match command {
         Command::line_args(opt) => {
             let program_pool = vec![corun::Program {
@@ -78,7 +84,7 @@ fn main() -> anyhow::Result<()> {
                 args: opt.args,
             }];
             let duration = utils::get_duration(opt.duration);
-            let duration_hash = corun::co_run(program_pool, duration, cpu_info);
+            let duration_hash = corun::co_run(program_pool, duration, cpu_info, &mut log_file);
             println!("durations: {:#?}", duration_hash);
         } // FIXME: this seems to have some problem with continuous inputs
 
@@ -90,8 +96,6 @@ fn main() -> anyhow::Result<()> {
             let contents = fs::read_to_string(config_path)?;
             let mut program_pool = Vec::new();
             let duration = utils::get_duration(opt.duration);
-            // let s = std::time::Instant::now(); TODO: use this as timer to time the total duration of the co run
-            // let e = s.elapsed();
 
             for line in contents.lines() {
                 //hope this works
@@ -121,8 +125,12 @@ fn main() -> anyhow::Result<()> {
                 };
                 program_pool.push(program);
             }
-            let duration_hash = corun::co_run(program_pool, duration, cpu_info);
+            let duration_hash = corun::co_run(program_pool, duration, cpu_info, &mut log_file);
             println!("durations: {:#?}", duration_hash);
+            log_file
+                .unwrap()
+                .write_all(format!("durations: {:#?}", duration_hash).as_bytes())
+                .unwrap();
         }
     }
     Ok(())
