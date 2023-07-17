@@ -1,10 +1,15 @@
+#![feature(drain_filter)]
+
 use clap::Parser;
 
 use std::fs;
 use std::path::PathBuf;
+use tracing::Level;
+use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 // use tracing_subscriber::prelude::*;
 mod corun;
+mod logging;
 mod utils;
 
 // TODO: need to change this to a file input (√)
@@ -55,7 +60,14 @@ enum Command {
 
 fn main() -> anyhow::Result<()> {
     env_logger::init_from_env("CORUN_LOG");
-    let cpu_info = utils::get_cpu_info();
+    // construct a subscriber that prints formatted traces to stdout
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(Level::TRACE)
+        .finish();
+    // use that subscriber to process traces emitted after this point
+    tracing::subscriber::set_global_default(subscriber)?;
+    // let cpu_info = utils::get_cpu_info();
+    let cpu_info = 4;
     let command: Command = Command::parse();
     match command {
         Command::line_args(opt) => {

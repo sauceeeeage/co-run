@@ -4,12 +4,16 @@ use std::io::Write;
 use std::path::PathBuf;
 // use clap::error::ContextValue::String;
 use std::string::String;
+use std::sync::Mutex;
 use std::thread::{self};
 use std::time;
 
+use chrono::Utc;
 use rand::Rng;
 use regex::Regex;
-use tracing::{info, trace};
+use tracing::{debug, info, trace, warn};
+
+use crate::logging::{logging, Log};
 
 // TODO: need logging(tracing and tracing-sub) on each program start time and finish time and the order thy ran(√), continuous scheduling, randomly schedule multiple programs(i actually didn't feel the need for this)
 // TODO: need to add git submodule for polybench(√)
@@ -26,59 +30,11 @@ pub struct Program {
     pub(crate) args: Option<Vec<String>>,
 }
 
-fn logging(
-    current_prog_status: usize,
-    timer: &HashMap<u32, (std::time::Instant, Program)>,
-    curr_prog: &Program,
-    curr_pid: u32,
-    start: std::time::Instant,
-    log_file: &mut File,
-) {
-    match current_prog_status {
-        0 => {
-            // 0 for start
-            trace!(
-                "program {:?}(pid: {:?}) started with {:?} args at {:?} time",
-                curr_prog.path,
-                curr_pid,
-                curr_prog.args,
-                start
-            );
-        }
-        1 => {
-            // 1 for finish
-            trace!(
-                "program {:?}(pid: {:?}) finished with {:?} args at {:?} time",
-                curr_prog.path,
-                curr_pid,
-                curr_prog.args,
-                start
-            );
-        }
-        _ => {
-            panic!("current program status is not 0 or 1");
-        }
-    }
-    info!(
-        "current running programs' starting time, names and args: {:#?}",
-        timer.values()
-    );
-    log_file
-        .write_all(
-            format!(
-                "current running programs' starting time, names and args: {:#?}",
-                timer.values()
-            )
-            .as_bytes(),
-        )
-        .expect("unexpected error");
-}
-
 pub fn co_run(
     programs: Vec<Program>,
-    total_dur: std::time::Duration,
+    total_dur: time::Duration,
     cpu_cnt: usize,
-) -> HashMap<Program, std::time::Duration> {
+) -> HashMap<u32, time::Duration> {
     let mut log_file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -87,99 +43,154 @@ pub fn co_run(
     let mut timer = HashMap::new();
     let mut children = Vec::new();
     let mut logger = HashMap::new();
-    let timer_start = std::time::Instant::now();
+    let mut human_readable = HashMap::new();
+    let timer_start = time::Instant::now();
+    let mut prog_counter = 0;
 
     while (timer_start.elapsed()) < total_dur {
         if timer.len() < cpu_cnt {
+            warn!("cpu is not fully utilized, launching more programs");
             // each thread take on program, if there's less programs than the thread num, launch one program
-            let current_prog = programs[rand::thread_rng().gen_range(0..=programs.len())].clone();
-            let child = single_run(&current_prog);
+            let mut current_prog =
+                programs[rand::thread_rng().gen_range(0..programs.len())].clone();
+            let child = single_run(&mut current_prog);
+            prog_counter += 1;
             let pid = child.id();
-            let start = std::time::Instant::now();
+            let start = time::Instant::now();
+            let human_start = Utc::now();
+            timer.insert(pid, start);
+            let pn_re = Regex::new(r"\/[a-zA-Z]+\/$").unwrap();
+            let prog_name = pn_re
+                .captures(current_prog.path.as_ref().unwrap().to_str().unwrap())
+                .unwrap()
+                .get(0)
+                .unwrap()
+                .as_str()
+                .replace("/", "")
+                .to_string();
+            let log = Log {
+                start: human_start,
+                finish: None,
+                prog_id: prog_counter,
+                prog_name,
+                cmd: current_prog.cmd.clone(),
+                args: current_prog.args.clone(),
+            };
             logging(
                 0,
-                &timer,
-                &current_prog,
                 pid,
-                start,
-                log_file
-                    .as_mut()
-                    .unwrap_or_else(|_| panic!("log file is not created")),
+                None,
+                log,
+                &mut human_readable,
+                log_file.as_mut().unwrap(),
             );
-            timer.insert(pid, (start, current_prog));
+
             children.push(child);
+            // assert!(std::env::set_current_dir(r"~/").is_ok());
         } else {
             // if there's more programs than the thread num, wait for one program to finish and launch another one
-
+            warn!("cpu is fully utilized, waiting for a program to finish");
             let sleep_dur = time::Duration::from_secs(2);
+            thread::sleep(sleep_dur); // FIXME: having some issues below, using this for now
+            let mut pid: u32 = Default::default();
+            let mut start: time::Instant = time::Instant::now();
+            let _ = children.iter_mut().find_map(|c| {
+                matches!(c.try_wait(), Ok(Some(_))).then(|| {
+                    start = timer.remove(&c.id()).unwrap_or_else(|| {
+                        debug!("timer: {:#?}", timer);
+                        panic!("program with pid: {:?} is not in the timer", c.id())
+                    });
+                    pid = c.id();
+                })
+            });
+            children.drain_filter(|child| child.id() == pid);
 
-            thread::sleep(sleep_dur); // FIXME: having some borrowing issues below, using this for now
-
-            // let mut child = children
-            //     .iter_mut()
-            //     .find(|&c| matches!(c.try_wait(), Ok(Some(_))))
-            //     .unwrap_or_else(|| panic!("no child is available"));
             // let pid = child.id();
-            // let (start, program) = timer.remove(&pid).unwrap_or_else(|| {
+            // let start = timer.remove(&pid).unwrap_or_else(|| {
             //     panic!("program with pid: {:?} is not in the timer", child.id())
             // });
-            // let duration = start.elapsed();
-            // logging(
-            //     1,
-            //     &timer,
-            //     &program,
-            //     pid,
-            //     start,
-            //     log_file
-            //         .as_mut()
-            //         .unwrap_or_else(|_| panic!("log file is not created")),
-            // );
-            // logger.insert(program, duration); // TODO: add start and end time to the logger, and print it into the file
+            let duration = start.elapsed();
+            let human_end = Utc::now();
+            let log = Log {
+                start: human_readable.get(&pid).unwrap().start,
+                finish: Some(human_end),
+                prog_id: human_readable.get(&pid).unwrap().prog_id,
+                prog_name: human_readable.get(&pid).unwrap().prog_name.clone(),
+                cmd: human_readable.get(&pid).unwrap().cmd.clone(),
+                args: human_readable.get(&pid).unwrap().args.clone(),
+            };
+            logging(
+                1,
+                pid,
+                Some(duration),
+                log,
+                &mut human_readable,
+                log_file.as_mut().unwrap(),
+            );
+            logger.insert(prog_counter, duration); // TODO: add start and end time to the logger, and print it into the file
         }
-    }
 
-    for mut child in children {
-        let _ = child.wait().expect("command wasn't running");
-        let pid = child.id();
-        let (start, program) = timer
-            .remove(&pid)
-            .unwrap_or_else(|| panic!("program with pid: {:?} is not in the timer", child.id()));
-        let duration = start.elapsed();
-        logging(
-            1,
-            &timer,
-            &program,
-            pid,
-            start,
-            log_file
-                .as_mut()
-                .unwrap_or_else(|_| panic!("log file is not created")),
-        );
-        logger.insert(program, duration); // TODO: add start and end time to the logger, and print it into the file
+        // for child in children.iter_mut() {
+        //     // FIXME: feels like this needs to be launched in another thread, and use non-blocking structure to wait for the child to finish
+        //     warn!("waiting for child to finish");
+        //     child.wait().expect("command wasn't running");
+
+        //     let pid = child.id();
+        //     let start = timer.remove(&pid).unwrap_or_else(|| {
+        //         panic!("program with pid: {:?} is not in the timer", child.id())
+        //     });
+        //     let duration = start.elapsed();
+        //     let human_end = Utc::now();
+        //     let log = Log {
+        //         start: human_readable.get(&pid).unwrap().start,
+        //         finish: Some(human_end),
+        //         prog_id: human_readable.get(&pid).unwrap().prog_id,
+        //         prog_name: human_readable.get(&pid).unwrap().prog_name.clone(),
+        //         cmd: human_readable.get(&pid).unwrap().cmd.clone(),
+        //         args: human_readable.get(&pid).unwrap().args.clone(),
+        //     };
+        //     logging(
+        //         1,
+        //         pid,
+        //         Some(duration),
+        //         log,
+        //         &mut human_readable,
+        //         log_file.as_mut().unwrap(),
+        //     );
+        //     logger.insert(prog_counter, duration); // TODO: add start and end time to the logger, and print it into the file
+        // }
     }
     logger
 }
 
 #[inline(always)]
-fn single_run(program: &Program) -> std::process::Child {
-    let program = program.clone();
-    let Some(path) = program.path else {
-        panic!("program path is not specified");
-    };
-    assert!(std::env::set_current_dir(path).is_ok());
-    let mut fixed_args = Vec::new();
-    for str in program.args.unwrap_or(Vec::new()) {
+fn single_run(program: &mut Program) -> std::process::Child {
+    // let mut program = program.clone();
+    // let Some(path) = program.path else {
+    //     panic!("program path is not specified");
+    // };
+    // println!("{:?}", program.path);
+    let prog_path = program.path.clone();
+    if !std::env::current_dir()
+        .unwrap()
+        .ends_with(program.path.as_ref().unwrap())
+    {
+        assert!(std::env::set_current_dir(prog_path.unwrap()).is_ok());
+    }
+    // let mut fixed_args = Vec::new();
+    for str in program.args.as_mut().unwrap_or(&mut Vec::new()) {
         let re = Regex::new(r"\=\*").unwrap();
         let rand =
             rand::thread_rng().gen_range(program.range.unwrap().0..=program.range.unwrap().1);
-        fixed_args.push(
-            re.replace_all(&str, format!("={}", rand).as_str())
-                .to_string(),
-        );
+        *str = re
+            .replace_all(&str, format!("={}", rand).as_str())
+            .to_string();
+
         // println!("{}", str);
     }
-    std::process::Command::new(program.cmd.unwrap())
-        .args(fixed_args)
+
+    std::process::Command::new(program.cmd.as_ref().unwrap())
+        .args(program.args.as_ref().unwrap())
         .spawn()
         .expect("failed to execute child")
 }
@@ -189,16 +200,28 @@ mod tests {
     use crate::corun::Program;
     use rand::Rng;
     use regex::Regex;
+    use std::path::Path;
 
     #[test]
     fn test() {
         let mut p = Program {
             cmd: Some("make".to_string()),
             path: Some("PolyBenchC-4.2.1/linear-algebra/blas/gemm/".into()),
-            range: Some((5, 50)),
+            range: Some((500, 5000)),
             args: Some(vec!["run".to_string(), "N=*".to_string()]),
         };
-        assert!(std::env::set_current_dir(p.path.unwrap()).is_ok());
+        let tmp = p.path.clone().unwrap();
+        for i in 0..3 {
+            let t = Path::new("PolyBenchC-4.2.1/linear-algebra/blas/gemm/");
+            println!("{}", i);
+            println!("curr dir: {:#?}", std::env::current_dir());
+            if !std::env::current_dir().unwrap().ends_with(t) {
+                println!("in here");
+                assert!(std::env::set_current_dir(t).is_ok());
+            }
+        }
+
+        println!("out");
 
         for str in p.args.as_mut().unwrap_or(&mut Vec::new()) {
             let re = Regex::new(r"\=\*").unwrap();
@@ -209,10 +232,33 @@ mod tests {
             // println!("{}", str);
         }
 
-        let mut c = std::process::Command::new(p.cmd.unwrap())
-            .args(p.args.unwrap_or(Vec::new()))
-            .spawn()
-            .expect("failed to execute child");
-        c.wait().expect("TODO: panic message");
+        println!(
+            "at {:#?}, exec {:#?} with {:#?}",
+            std::env::current_dir().unwrap(),
+            std::env::current_exe(),
+            p.args.clone()
+        );
+
+        let mut cc = Vec::new();
+        for i in 0..4 {
+            let mut c = std::process::Command::new(p.cmd.clone().unwrap())
+                .args(p.args.clone().unwrap_or(Vec::new()))
+                .spawn()
+                .expect("failed to execute child");
+            println!("start time: {:?}", chrono::Utc::now());
+            cc.push(c);
+        }
+
+        for mut c in cc {
+            c.wait().expect("TODO: panic message");
+            println!("end time: {:?}", chrono::Utc::now());
+        }
+
+        // let mut c = std::process::Command::new(p.cmd.unwrap())
+        //     .args(p.args.unwrap_or(Vec::new()))
+        //     .spawn()
+        //     .expect("failed to execute child");
+        // c.wait().expect("TODO: panic message");
+        println!("here");
     }
 }
