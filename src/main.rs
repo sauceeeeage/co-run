@@ -67,8 +67,8 @@ fn main() -> anyhow::Result<()> {
         .finish();
     // use that subscriber to process traces emitted after this point
     tracing::subscriber::set_global_default(subscriber)?;
-    // let cpu_info = utils::get_cpu_info();
-    let cpu_info = 4;
+    let cpu_info = utils::get_cpu_info();
+    // let cpu_info = 4;
     let command: Command = Command::parse();
     let mut log_file = OpenOptions::new()
         .read(true)

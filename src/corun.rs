@@ -112,7 +112,7 @@ pub fn co_run(
             //     debug!("child: {:?}", child.id());
             // }
             // debug!("children: {:#?}", children);
-            let mut children = children
+            let _ = children
                 .extract_if(|child| child.id() == pid)
                 .collect::<Vec<_>>();
 
