@@ -74,5 +74,5 @@ pub fn logging(
         }
     }
     total_log.insert(pid, curr_prog_log);
-    info!("current running programs: {:#?}", total_log);
+    info!("all programs ran: {:#?}", total_log);
 }

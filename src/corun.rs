@@ -51,7 +51,6 @@ pub fn co_run(
             let mut current_prog =
                 programs[rand::thread_rng().gen_range(0..programs.len())].clone();
             let child = single_run(&mut current_prog);
-            prog_counter += 1;
             let pid = child.id();
             let start = time::Instant::now();
             let human_start = Utc::now();
@@ -73,6 +72,7 @@ pub fn co_run(
                 cmd: current_prog.cmd.clone(),
                 args: current_prog.args.clone(),
             };
+            prog_counter += 1;
             logging(
                 0,
                 pid,
@@ -93,14 +93,35 @@ pub fn co_run(
             let mut start: time::Instant = time::Instant::now();
             let _ = children.iter_mut().find_map(|c| {
                 matches!(c.try_wait(), Ok(Some(_))).then(|| {
+                    pid = c.id();
+                    // debug!("try waiting");
+                    // debug!("pid: {:?}", pid);
+                    // debug!("timer: {:#?}", timer);
                     start = timer.remove(&c.id()).unwrap_or_else(|| {
+                        debug!("timer remove failed");
                         debug!("timer: {:#?}", timer);
+                        debug!("pid: {:?}", c.id());
+                        debug!("human_readable: {:#?}", human_readable);
+                        debug!("logger: {:#?}", logger);
                         panic!("program with pid: {:?} is not in the timer", c.id())
                     });
-                    pid = c.id();
                 })
             });
-            let _ = children.extract_if(|child| child.id() == pid);
+            // debug!("before extract if");
+            // for child in children.iter() {
+            //     debug!("child: {:?}", child.id());
+            // }
+            // debug!("children: {:#?}", children);
+            let mut children = children
+                .extract_if(|child| child.id() == pid)
+                .collect::<Vec<_>>();
+
+            // debug!("pid: {:?}", pid);
+            // debug!("after extract if");
+            // for child in children.iter() {
+            //     debug!("child: {:?}", child.id());
+            // }
+            // debug!("children: {:#?}", children);
 
             // let pid = child.id();
             // let start = timer.remove(&pid).unwrap_or_else(|| {
@@ -181,7 +202,7 @@ fn single_run(program: &mut Program) -> std::process::Child {
             rand::thread_rng().gen_range(program.range.unwrap().0..=program.range.unwrap().1);
         *str = re
             .replace_all(str, format!("={}", rand).as_str())
-            .to_string();
+            .to_string(); // TODO: this may need an iter to loop through all=* args
 
         // println!("{}", str);
     }
