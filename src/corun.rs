@@ -100,7 +100,7 @@ pub fn co_run(
                     pid = c.id();
                 })
             });
-            children.drain_filter(|child| child.id() == pid);
+            let _ = children.extract_if(|child| child.id() == pid);
 
             // let pid = child.id();
             // let start = timer.remove(&pid).unwrap_or_else(|| {
