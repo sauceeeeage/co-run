@@ -12,9 +12,10 @@ use std::time;
 use chrono::Utc;
 use rand::Rng;
 use regex::Regex;
-use tracing::{debug, warn};
+use tracing::{debug, trace, warn};
 
 use crate::logging::{logging, Log};
+use crate::utils::delete_bin;
 
 // TODO: need logging(tracing and tracing-sub) on each program start time and finish time and the order thy ran(√), continuous scheduling, randomly schedule multiple programs(i actually didn't feel the need for this)
 // TODO: need to add git submodule for polybench(√)
@@ -22,6 +23,7 @@ use crate::logging::{logging, Log};
 // TODO: do permutation on the program args and other programs, and then use them as program pools
 // TODO: need to add back tracing for the program start time and finish time using logging in order to tell which programs are running at given time, thus can figure out the DMC for that given time(√)
 // TODO: do GEMM(interval between 500-5000(rand num), run for 5 hr, night time(est)) polybench and get DMC(on cycle2.cs machine)
+// TODO: make tmpdir for each compliation, and delete them after the program finishes to make sure each concurrent programs are running the correct program(use tmpfile crate, may also need to add more cli args to the Makefile)
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Program {
@@ -36,10 +38,10 @@ pub fn co_run(
     total_dur: time::Duration,
     cpu_cnt: usize,
     log_file: &mut Result<File, std::io::Error>,
-) -> HashMap<u32, time::Duration> {
+) -> HashMap<u32, Log> {
     let mut timer = HashMap::new();
     let mut children = Vec::new();
-    let mut logger = HashMap::new();
+    // let mut logger = HashMap::new();
     let mut human_readable = HashMap::new();
     let timer_start = time::Instant::now();
     let mut prog_counter = 0;
@@ -50,7 +52,7 @@ pub fn co_run(
             // each thread take on program, if there's less programs than the thread num, launch one program
             let mut current_prog =
                 programs[rand::thread_rng().gen_range(0..programs.len())].clone();
-            let child = single_run(&mut current_prog);
+            let child = single_run(&mut current_prog, prog_counter);
             let pid = child.id();
             let start = time::Instant::now();
             let human_start = Utc::now();
@@ -67,6 +69,7 @@ pub fn co_run(
             let log = Log {
                 start: human_start,
                 finish: None,
+                duration: None,
                 prog_id: prog_counter,
                 prog_name,
                 cmd: current_prog.cmd.clone(),
@@ -102,7 +105,7 @@ pub fn co_run(
                         debug!("timer: {:#?}", timer);
                         debug!("pid: {:?}", c.id());
                         debug!("human_readable: {:#?}", human_readable);
-                        debug!("logger: {:#?}", logger);
+                        // debug!("logger: {:#?}", logger);
                         panic!("program with pid: {:?} is not in the timer", c.id())
                     });
                 })
@@ -132,11 +135,13 @@ pub fn co_run(
             let log = Log {
                 start: human_readable.get(&pid).unwrap().start,
                 finish: Some(human_end),
+                duration: Some(duration),
                 prog_id: human_readable.get(&pid).unwrap().prog_id,
                 prog_name: human_readable.get(&pid).unwrap().prog_name.clone(),
                 cmd: human_readable.get(&pid).unwrap().cmd.clone(),
                 args: human_readable.get(&pid).unwrap().args.clone(),
             };
+            delete_bin(log.prog_id.clone().to_string().into());
             logging(
                 1,
                 pid,
@@ -145,7 +150,10 @@ pub fn co_run(
                 &mut human_readable,
                 log_file.as_mut().unwrap(),
             );
-            logger.insert(prog_counter, duration); // TODO: add start and end time to the logger, and print it into the file
+            trace!("program {:?} finished", pid);
+            trace!("program {:?} ran for {:?}", pid, duration);
+            trace!("inserting program {:?} into logger", prog_counter);
+            // logger.insert(prog_counter, duration); // TODO: add start and end time to the logger, and print it into the file
         }
 
         // for child in children.iter_mut() {
@@ -178,11 +186,12 @@ pub fn co_run(
         //     logger.insert(prog_counter, duration); // TODO: add start and end time to the logger, and print it into the file
         // }
     }
-    logger
+    // logger
+    human_readable
 }
 
 #[inline(always)]
-fn single_run(program: &mut Program) -> std::process::Child {
+fn single_run(program: &mut Program, file_name: u32) -> std::process::Child {
     // let mut program = program.clone();
     // let Some(path) = program.path else {
     //     panic!("program path is not specified");
@@ -198,13 +207,22 @@ fn single_run(program: &mut Program) -> std::process::Child {
     // let mut fixed_args = Vec::new();
     for str in program.args.as_mut().unwrap_or(&mut Vec::new()) {
         let re = Regex::new(r"\=\*").unwrap();
+        let file_re = Regex::new(r"file_name\=\*").unwrap();
         let rand =
             rand::thread_rng().gen_range(program.range.unwrap().0..=program.range.unwrap().1);
-        *str = re
-            .replace_all(str, format!("={}", rand).as_str())
-            .to_string(); // TODO: this may need an iter to loop through all=* args
-
-        // println!("{}", str);
+        if file_re.is_match(str) {
+            // debug!("file_name is matched");
+            // debug!("file_name: {:?}", file_name);
+            *str = file_re
+                .replace_all(str, format!("file_name={}", file_name).as_str())
+                .to_string();
+            continue;
+        } else {
+            *str = re
+                .replace_all(str, format!("={}", rand).as_str())
+                .to_string(); // TODO: this may need an iter to loop through all=* args to give different random numbers for different args
+                              // println!("{}", str);
+        }
     }
 
     std::process::Command::new(program.cmd.as_ref().unwrap())
@@ -218,10 +236,19 @@ mod tests {
     use crate::corun::Program;
     use rand::Rng;
     use regex::Regex;
-    use std::path::Path;
+    use std::fs::File;
+    use std::io::{self, Write};
+    use std::{env, path::Path};
 
     #[test]
     fn test() {
+        // println!("{}", env::consts::OS);
+        // if cfg!(target_os = "macos") {
+        //     println!("macos");
+        // }
+        let re = Regex::new(r"file_name=\d+").unwrap();
+        let mut str = "file_name=*".to_string();
+
         let mut p = Program {
             cmd: Some("make".to_string()),
             path: Some("PolyBenchC-4.2.1/linear-algebra/blas/gemm/".into()),

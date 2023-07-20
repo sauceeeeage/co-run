@@ -1,1 +1,1 @@
-make PolyBenchC-4.2.1/linear-algebra/blas/gemm/ 5-50 run N=*
+make PolyBenchC-4.2.1/linear-algebra/blas/gemm/ 5-50 run N=* file_name=*

@@ -8,6 +8,7 @@ use tracing::{info, trace};
 pub struct Log {
     pub(crate) start: DateTime<Utc>,
     pub(crate) finish: Option<DateTime<Utc>>,
+    pub(crate) duration: Option<std::time::Duration>,
     pub(crate) prog_id: u32,
     pub(crate) prog_name: String,
     pub(crate) cmd: Option<String>,

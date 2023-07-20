@@ -5,7 +5,7 @@ use clap::Parser;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
-use tracing::Level;
+use tracing::{trace, Level};
 // use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 // use tracing_subscriber::prelude::*;
@@ -85,7 +85,11 @@ fn main() -> anyhow::Result<()> {
             }];
             let duration = utils::get_duration(opt.duration);
             let duration_hash = corun::co_run(program_pool, duration, cpu_info, &mut log_file);
-            println!("durations: {:#?}", duration_hash);
+            trace!("total log: {:#?}", duration_hash);
+            log_file
+                .unwrap()
+                .write_all(format!("total log: {:#?}", duration_hash).as_bytes())
+                .unwrap();
         } // FIXME: this seems to have some problem with continuous inputs
 
         Command::file_args(opt) => {
@@ -126,10 +130,17 @@ fn main() -> anyhow::Result<()> {
                 program_pool.push(program);
             }
             let duration_hash = corun::co_run(program_pool, duration, cpu_info, &mut log_file);
-            println!("durations: {:#?}", duration_hash);
+            trace!("total log: {:#?}", duration_hash);
             log_file
                 .unwrap()
-                .write_all(format!("durations: {:#?}", duration_hash).as_bytes())
+                .write_all(
+                    format!(
+                        "total log length: {}, \n total log: {:#?}",
+                        duration_hash.len(),
+                        duration_hash
+                    )
+                    .as_bytes(),
+                )
                 .unwrap();
         }
     }
