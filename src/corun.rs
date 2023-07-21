@@ -94,82 +94,117 @@ pub fn co_run(
             // let sleep_dur = time::Duration::from_secs(2);
             // thread::sleep(sleep_dur); // FIXME: having some issues below, using this for now
 
-            let mut pid: u32 = Default::default();
+            // let mut pid: u32 = Default::default();
+            let mut pid_vec = Vec::new();
             let mut start: time::Instant = time::Instant::now();
-            let _ = children.iter_mut().find_map(|c| {
-                match c.try_wait() {
-                    Ok(Some(_)) => {
-                        pid = c.id();
-                        start = timer.remove(&c.id()).unwrap_or_else(|| {
-                            debug!("timer remove failed");
-                            debug!("timer: {:#?}", timer);
-                            debug!("pid: {:?}", c.id());
-                            debug!("human_readable: {:#?}", human_readable);
-                            // debug!("logger: {:#?}", logger);
-                            panic!("program with pid: {:?} is not in the timer", c.id())
-                        });
-                        Some(())
-                    }
-                    Ok(None) => {
-                        info!("status not ready yet, let's really wait");
-                        let sleep_dur = time::Duration::from_secs(2);
-                        thread::sleep(sleep_dur); // FIXME: having some issues below, using this for now
-                        None
-                    }
-                    Err(e) => {
-                        debug!("try_wait failed");
-                        debug!("timer: {:#?}", timer);
-                        debug!("pid: {:?}", c.id());
-                        debug!("human_readable: {:#?}", human_readable);
-                        // debug!("logger: {:#?}", logger);
-                        debug!("error: {:?}", e);
-                        panic!("program with pid: {:?} is not in the timer", c.id())
-                    }
-                }
-            });
+            // let _ = children.iter_mut().find_map(|c| {
+            //     match c.try_wait() {
+            //         Ok(Some(_)) => {
+            //             pid = c.id();
+            //             start = timer.remove(&c.id()).unwrap_or_else(|| {
+            //                 debug!("timer remove failed");
+            //                 debug!("timer: {:#?}", timer);
+            //                 debug!("pid: {:?}", c.id());
+            //                 debug!("human_readable: {:#?}", human_readable);
+            //                 // debug!("logger: {:#?}", logger);
+            //                 panic!("program with pid: {:?} is not in the timer", c.id())
+            //             });
+            //             Some(())
+            //         }
+            //         Ok(None) => {
+            //             info!("status not ready yet, let's really wait");
+            //             let sleep_dur = time::Duration::from_secs(2);
+            //             thread::sleep(sleep_dur); // FIXME: having some issues below, using this for now
+            //             None
+            //         }
+            //         Err(e) => {
+            //             debug!("try_wait failed");
+            //             debug!("timer: {:#?}", timer);
+            //             debug!("pid: {:?}", c.id());
+            //             debug!("human_readable: {:#?}", human_readable);
+            //             // debug!("logger: {:#?}", logger);
+            //             debug!("error: {:?}", e);
+            //             panic!("program with pid: {:?} is not in the timer", c.id())
+            //         }
+            //     }
+            // });
+            let _ = children
+                .iter_mut()
+                .filter_map(|c| {
+                    matches!(c.try_wait(), Ok(Some(_)))
+                        .then(|| {
+                            debug!("program {:?} finished", c.id());
+                            pid_vec.push(c.id());
+                        })
+                        .or_else(|| {
+                            info!("status not ready yet, let's really wait");
+                            let sleep_dur = time::Duration::from_secs(2);
+                            thread::sleep(sleep_dur); // FIXME: having some issues below, using this for now
+                            None
+                        })
+                })
+                .collect::<Vec<_>>();
             // debug!("before extract if");
             // for child in children.iter() {
             //     debug!("child: {:?}", child.id());
             // }
             // debug!("children: {:#?}", children);
-            let _ = children
-                .extract_if(|child| child.id() == pid)
-                .collect::<Vec<_>>();
 
-            // debug!("pid: {:?}", pid);
-            // debug!("after extract if");
-            // for child in children.iter() {
-            //     debug!("child: {:?}", child.id());
-            // }
-            // debug!("children: {:#?}", children);
+            debug!("pid_vec: {:#?}", pid_vec);
+            let _ = (!pid_vec.is_empty()).then(|| {
+                debug!("pid_vec is not empty");
+                for pid in pid_vec.iter() {
+                    debug!("draining pid: {:?}", pid);
+                    let _ = children
+                        .extract_if(|child: &mut std::process::Child| child.id() == *pid)
+                        .collect::<Vec<_>>();
+                    debug!("deleted pid: {:?}", pid);
+                    start = timer.remove(&pid).unwrap_or_else(|| {
+                        debug!("timer remove failed");
+                        debug!("timer: {:#?}", timer);
+                        debug!("pid: {:?}", pid);
+                        debug!("human_readable: {:#?}", human_readable);
+                        // debug!("logger: {:#?}", logger);
+                        panic!("program with pid: {:?} is not in the timer", pid)
+                    });
+                    // debug!("pid: {:?}", pid);
+                    // debug!("after extract if");
+                    // for child in children.iter() {
+                    //     debug!("child: {:?}", child.id());
+                    // }
+                    // debug!("children: {:#?}", children);
 
-            // let pid = child.id();
-            // let start = timer.remove(&pid).unwrap_or_else(|| {
-            //     panic!("program with pid: {:?} is not in the timer", child.id())
-            // });
-            let duration = start.elapsed();
-            let human_end = Utc::now();
-            let log = Log {
-                start: human_readable.get(&pid).unwrap().start,
-                finish: Some(human_end),
-                duration: Some(duration),
-                prog_id: human_readable.get(&pid).unwrap().prog_id,
-                prog_name: human_readable.get(&pid).unwrap().prog_name.clone(),
-                cmd: human_readable.get(&pid).unwrap().cmd.clone(),
-                args: human_readable.get(&pid).unwrap().args.clone(),
-            };
-            delete_bin(log.prog_id.clone().to_string().into());
-            logging(
-                1,
-                pid,
-                Some(duration),
-                log,
-                &mut human_readable,
-                log_file.as_mut().unwrap(),
-            );
-            trace!("program {:?} finished", pid);
-            trace!("program {:?} ran for {:?}", pid, duration);
-            trace!("inserting program {:?} into logger", prog_counter);
+                    // let pid = child.id();
+                    // let start = timer.remove(&pid).unwrap_or_else(|| {
+                    //     panic!("program with pid: {:?} is not in the timer", child.id())
+                    // });
+                    let duration = start.elapsed();
+                    let human_end = Utc::now();
+                    let log = Log {
+                        start: human_readable.get(&pid).unwrap().start,
+                        finish: Some(human_end),
+                        duration: Some(duration),
+                        prog_id: human_readable.get(&pid).unwrap().prog_id,
+                        prog_name: human_readable.get(&pid).unwrap().prog_name.clone(),
+                        cmd: human_readable.get(&pid).unwrap().cmd.clone(),
+                        args: human_readable.get(&pid).unwrap().args.clone(),
+                    };
+                    delete_bin(log.prog_id.clone().to_string().into());
+                    logging(
+                        1,
+                        *pid,
+                        Some(duration),
+                        log,
+                        &mut human_readable,
+                        log_file.as_mut().unwrap(),
+                    );
+                }
+            });
+            pid_vec.clear();
+
+            // trace!("program {:?} finished", pid);
+            // trace!("program {:?} ran for {:?}", pid, duration);
+            // trace!("inserting program {:?} into logger", prog_counter);
             // logger.insert(prog_counter, duration); // TODO: add start and end time to the logger, and print it into the file
         }
     }
@@ -229,10 +264,11 @@ mod tests {
 
     #[test]
     fn test() {
-        // println!("{}", env::consts::OS);
-        // if cfg!(target_os = "macos") {
-        //     println!("macos");
-        // }
+        let a = ["1", "two", "NaN", "four", "5"];
+
+        let mut iter = a.into_iter().filter_map(|s| s.parse::<String>().ok());
+        println!("{:#?}", iter);
+        println!("{:#?}", a);
         let re = Regex::new(r"file_name=\d+").unwrap();
         let mut str = "file_name=*".to_string();
 
