@@ -12,7 +12,7 @@ use std::time;
 use chrono::Utc;
 use rand::Rng;
 use regex::Regex;
-use tracing::{debug, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 use crate::logging::{logging, Log};
 use crate::utils::delete_bin;
@@ -90,25 +90,42 @@ pub fn co_run(
         } else {
             // if there's more programs than the thread num, wait for one program to finish and launch another one
             warn!("cpu is fully utilized, waiting for a program to finish");
-            let sleep_dur = time::Duration::from_secs(2);
-            thread::sleep(sleep_dur); // FIXME: having some issues below, using this for now
+
+            // let sleep_dur = time::Duration::from_secs(2);
+            // thread::sleep(sleep_dur); // FIXME: having some issues below, using this for now
+
             let mut pid: u32 = Default::default();
             let mut start: time::Instant = time::Instant::now();
             let _ = children.iter_mut().find_map(|c| {
-                matches!(c.try_wait(), Ok(Some(_))).then(|| {
-                    pid = c.id();
-                    // debug!("try waiting");
-                    // debug!("pid: {:?}", pid);
-                    // debug!("timer: {:#?}", timer);
-                    start = timer.remove(&c.id()).unwrap_or_else(|| {
-                        debug!("timer remove failed");
+                match c.try_wait() {
+                    Ok(Some(_)) => {
+                        pid = c.id();
+                        start = timer.remove(&c.id()).unwrap_or_else(|| {
+                            debug!("timer remove failed");
+                            debug!("timer: {:#?}", timer);
+                            debug!("pid: {:?}", c.id());
+                            debug!("human_readable: {:#?}", human_readable);
+                            // debug!("logger: {:#?}", logger);
+                            panic!("program with pid: {:?} is not in the timer", c.id())
+                        });
+                        Some(())
+                    }
+                    Ok(None) => {
+                        info!("status not ready yet, let's really wait");
+                        let sleep_dur = time::Duration::from_secs(2);
+                        thread::sleep(sleep_dur); // FIXME: having some issues below, using this for now
+                        None
+                    }
+                    Err(e) => {
+                        debug!("try_wait failed");
                         debug!("timer: {:#?}", timer);
                         debug!("pid: {:?}", c.id());
                         debug!("human_readable: {:#?}", human_readable);
                         // debug!("logger: {:#?}", logger);
+                        debug!("error: {:?}", e);
                         panic!("program with pid: {:?} is not in the timer", c.id())
-                    });
-                })
+                    }
+                }
             });
             // debug!("before extract if");
             // for child in children.iter() {
@@ -155,36 +172,6 @@ pub fn co_run(
             trace!("inserting program {:?} into logger", prog_counter);
             // logger.insert(prog_counter, duration); // TODO: add start and end time to the logger, and print it into the file
         }
-
-        // for child in children.iter_mut() {
-        //     // FIXME: feels like this needs to be launched in another thread, and use non-blocking structure to wait for the child to finish
-        //     warn!("waiting for child to finish");
-        //     child.wait().expect("command wasn't running");
-
-        //     let pid = child.id();
-        //     let start = timer.remove(&pid).unwrap_or_else(|| {
-        //         panic!("program with pid: {:?} is not in the timer", child.id())
-        //     });
-        //     let duration = start.elapsed();
-        //     let human_end = Utc::now();
-        //     let log = Log {
-        //         start: human_readable.get(&pid).unwrap().start,
-        //         finish: Some(human_end),
-        //         prog_id: human_readable.get(&pid).unwrap().prog_id,
-        //         prog_name: human_readable.get(&pid).unwrap().prog_name.clone(),
-        //         cmd: human_readable.get(&pid).unwrap().cmd.clone(),
-        //         args: human_readable.get(&pid).unwrap().args.clone(),
-        //     };
-        //     logging(
-        //         1,
-        //         pid,
-        //         Some(duration),
-        //         log,
-        //         &mut human_readable,
-        //         log_file.as_mut().unwrap(),
-        //     );
-        //     logger.insert(prog_counter, duration); // TODO: add start and end time to the logger, and print it into the file
-        // }
     }
     // logger
     human_readable
