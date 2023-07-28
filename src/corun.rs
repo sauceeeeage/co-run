@@ -12,7 +12,7 @@ use std::time;
 use chrono::Utc;
 use rand::Rng;
 use regex::Regex;
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, info, warn};
 
 use crate::logging::{logging, Log};
 use crate::utils::delete_bin;
@@ -138,7 +138,7 @@ pub fn co_run(
                         })
                         .or_else(|| {
                             info!("status not ready yet, let's really wait");
-                            let sleep_dur = time::Duration::from_secs(2);
+                            let sleep_dur = time::Duration::from_millis(2500);
                             thread::sleep(sleep_dur); // FIXME: having some issues below, using this for now
                             None
                         })
@@ -159,7 +159,7 @@ pub fn co_run(
                         .extract_if(|child: &mut std::process::Child| child.id() == *pid)
                         .collect::<Vec<_>>();
                     debug!("deleted pid: {:?}", pid);
-                    start = timer.remove(&pid).unwrap_or_else(|| {
+                    start = timer.remove(pid).unwrap_or_else(|| {
                         debug!("timer remove failed");
                         debug!("timer: {:#?}", timer);
                         debug!("pid: {:?}", pid);
@@ -181,13 +181,13 @@ pub fn co_run(
                     let duration = start.elapsed();
                     let human_end = Utc::now();
                     let log = Log {
-                        start: human_readable.get(&pid).unwrap().start,
+                        start: human_readable.get(pid).unwrap().start,
                         finish: Some(human_end),
                         duration: Some(duration),
-                        prog_id: human_readable.get(&pid).unwrap().prog_id,
-                        prog_name: human_readable.get(&pid).unwrap().prog_name.clone(),
-                        cmd: human_readable.get(&pid).unwrap().cmd.clone(),
-                        args: human_readable.get(&pid).unwrap().args.clone(),
+                        prog_id: human_readable.get(pid).unwrap().prog_id,
+                        prog_name: human_readable.get(pid).unwrap().prog_name.clone(),
+                        cmd: human_readable.get(pid).unwrap().cmd.clone(),
+                        args: human_readable.get(pid).unwrap().args.clone(),
                     };
                     delete_bin(log.prog_id.clone().to_string().into());
                     logging(
