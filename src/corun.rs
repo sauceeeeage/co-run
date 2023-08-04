@@ -1,12 +1,14 @@
-use std::collections::HashMap;
-use std::fs::File;
+use std::fs::OpenOptions;
 // use std::io::Write;
 use std::path::PathBuf;
 // use clap::error::ContextValue::String;
 use std::string::String;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 // use std::sync::Mutex;
 use std::thread::{self};
 use std::time;
+use threadpool::ThreadPool;
 
 // use anyhow::Error;
 use chrono::Utc;
@@ -25,6 +27,10 @@ use crate::utils::delete_bin;
 // TODO: do GEMM(interval between 500-5000(rand num), run for 5 hr, night time(est)) polybench and get DMC(on cycle2.cs machine)
 // TODO: make tmpdir for each compliation, and delete them after the program finishes to make sure each concurrent programs are running the correct program(use tmpfile crate, may also need to add more cli args to the Makefile)
 
+// TODO: concurrently launch programs, instead of like right now(one by one)
+
+static PROG_COUNTER: AtomicU64 = AtomicU64::new(1);
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Program {
     pub(crate) cmd: Option<String>,
@@ -33,192 +39,91 @@ pub struct Program {
     pub(crate) args: Option<Vec<String>>,
 }
 
+fn get_prog_name(prog_path: Option<PathBuf>) -> String {
+    let pn_re = Regex::new(r"\/[a-zA-Z]+\/$").unwrap();
+    pn_re
+        .captures(prog_path.as_ref().unwrap().to_str().unwrap())
+        .unwrap()
+        .get(0)
+        .unwrap()
+        .as_str()
+        .replace('/', "")
+        .to_string()
+}
+
 pub fn co_run(
-    programs: Vec<Program>,
+    programs: Arc<RwLock<Vec<Program>>>,
     total_dur: time::Duration,
     cpu_cnt: usize,
-    log_file: &mut Result<File, std::io::Error>,
-) -> HashMap<u32, Log> {
-    let mut timer = HashMap::new();
-    let mut children = Vec::new();
-    // let mut logger = HashMap::new();
-    let mut human_readable = HashMap::new();
+    // log_file: &'static mut Arc<Mutex<Result<File, std::io::Error>>>,
+) -> Vec<Log> {
+    let human_readable = Arc::new(Mutex::new(Vec::new()));
+    let mut pool = ThreadPool::new(cpu_cnt);
     let timer_start = time::Instant::now();
-    let mut prog_counter = 0;
-
+    pool.set_num_threads(cpu_cnt);
+    let log_file = Arc::new(Mutex::new(
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open("log"),
+    ));
     while (timer_start.elapsed()) < total_dur {
-        if timer.len() < cpu_cnt {
-            warn!("cpu is not fully utilized, launching more programs");
-            // each thread take on program, if there's less programs than the thread num, launch one program
-            let mut current_prog =
-                programs[rand::thread_rng().gen_range(0..programs.len())].clone();
-            let child = single_run(&mut current_prog, prog_counter);
-            let pid = child.id();
-            let start = time::Instant::now();
-            let human_start = Utc::now();
-            timer.insert(pid, start);
-            let pn_re = Regex::new(r"\/[a-zA-Z]+\/$").unwrap();
-            let prog_name = pn_re
-                .captures(current_prog.path.as_ref().unwrap().to_str().unwrap())
-                .unwrap()
-                .get(0)
-                .unwrap()
-                .as_str()
-                .replace('/', "")
-                .to_string();
-            let log = Log {
-                start: human_start,
-                finish: None,
-                duration: None,
-                prog_id: prog_counter,
-                prog_name,
-                cmd: current_prog.cmd.clone(),
-                args: current_prog.args.clone(),
-            };
-            prog_counter += 1;
-            logging(
-                0,
-                pid,
-                None,
-                log,
-                &mut human_readable,
-                log_file.as_mut().unwrap(),
-            );
+        // if pool.active_count() < cpu_cnt {
 
-            children.push(child);
-            // assert!(std::env::set_current_dir(r"~/").is_ok());
-        } else {
-            // if there's more programs than the thread num, wait for one program to finish and launch another one
-            warn!("cpu is fully utilized, waiting for a program to finish");
+        // }
+        let log_file = Arc::clone(&log_file);
+        let programs = Arc::clone(&programs);
+        let human_readable = Arc::clone(&human_readable);
 
-            // let sleep_dur = time::Duration::from_secs(2);
-            // thread::sleep(sleep_dur); // FIXME: having some issues below, using this for now
+        if pool.queued_count() == 0 {
+            warn!("program queue was empty, adding new jobs");
+            info!("current queue size: {}", pool.queued_count());
+            info!("current active threads: {}", pool.active_count());
+            pool.execute(move || {
+                // FIXME: the problem maybe the lock issue, but i'm not sure
+                // FIXME: give subroutines Arc instead of aquiring the lock here(let those subroutines get the locks)
+                // let mut human_readable = human_readable.lock().unwrap();
+                // let mut log_file = log_file.lock().unwrap();
+                warn!("cpu is not fully utilized, launching more programs");
+                // let tid: u64 = thread::current().id().as_u64().into();
+                let c_programs = programs.read().unwrap();
+                let current_prog = c_programs
+                    [rand::thread_rng().gen_range(0..programs.read().unwrap().len())]
+                .clone();
+                let c = current_prog.clone();
 
-            // let mut pid: u32 = Default::default();
-            let mut pid_vec = Vec::new();
-            let mut start: time::Instant = time::Instant::now();
-            // let _ = children.iter_mut().find_map(|c| {
-            //     match c.try_wait() {
-            //         Ok(Some(_)) => {
-            //             pid = c.id();
-            //             start = timer.remove(&c.id()).unwrap_or_else(|| {
-            //                 debug!("timer remove failed");
-            //                 debug!("timer: {:#?}", timer);
-            //                 debug!("pid: {:?}", c.id());
-            //                 debug!("human_readable: {:#?}", human_readable);
-            //                 // debug!("logger: {:#?}", logger);
-            //                 panic!("program with pid: {:?} is not in the timer", c.id())
-            //             });
-            //             Some(())
-            //         }
-            //         Ok(None) => {
-            //             info!("status not ready yet, let's really wait");
-            //             let sleep_dur = time::Duration::from_secs(2);
-            //             thread::sleep(sleep_dur); // FIXME: having some issues below, using this for now
-            //             None
-            //         }
-            //         Err(e) => {
-            //             debug!("try_wait failed");
-            //             debug!("timer: {:#?}", timer);
-            //             debug!("pid: {:?}", c.id());
-            //             debug!("human_readable: {:#?}", human_readable);
-            //             // debug!("logger: {:#?}", logger);
-            //             debug!("error: {:?}", e);
-            //             panic!("program with pid: {:?} is not in the timer", c.id())
-            //         }
-            //     }
-            // });
-            let _ = children
-                .iter_mut()
-                .filter_map(|c| {
-                    matches!(c.try_wait(), Ok(Some(_)))
-                        .then(|| {
-                            debug!("program {:?} finished", c.id());
-                            pid_vec.push(c.id());
-                        })
-                        .or_else(|| {
-                            info!("status not ready yet, let's really wait");
-                            let sleep_dur = time::Duration::from_millis(2500);
-                            thread::sleep(sleep_dur); // FIXME: having some issues below, using this for now
-                            None
-                        })
-                })
-                .collect::<Vec<_>>();
-            // debug!("before extract if");
-            // for child in children.iter() {
-            //     debug!("child: {:?}", child.id());
-            // }
-            // debug!("children: {:#?}", children);
-
-            debug!("pid_vec: {:#?}", pid_vec);
-            let _ = (!pid_vec.is_empty()).then(|| {
-                debug!("pid_vec is not empty");
-                for pid in pid_vec.iter() {
-                    debug!("draining pid: {:?}", pid);
-                    let _ = children
-                        .extract_if(|child: &mut std::process::Child| child.id() == *pid)
-                        .collect::<Vec<_>>();
-                    debug!("deleted pid: {:?}", pid);
-                    start = timer.remove(pid).unwrap_or_else(|| {
-                        debug!("timer remove failed");
-                        debug!("timer: {:#?}", timer);
-                        debug!("pid: {:?}", pid);
-                        debug!("human_readable: {:#?}", human_readable);
-                        // debug!("logger: {:#?}", logger);
-                        panic!("program with pid: {:?} is not in the timer", pid)
-                    });
-                    // debug!("pid: {:?}", pid);
-                    // debug!("after extract if");
-                    // for child in children.iter() {
-                    //     debug!("child: {:?}", child.id());
-                    // }
-                    // debug!("children: {:#?}", children);
-
-                    // let pid = child.id();
-                    // let start = timer.remove(&pid).unwrap_or_else(|| {
-                    //     panic!("program with pid: {:?} is not in the timer", child.id())
-                    // });
-                    let duration = start.elapsed();
-                    let human_end = Utc::now();
-                    let log = Log {
-                        start: human_readable.get(pid).unwrap().start,
-                        finish: Some(human_end),
-                        duration: Some(duration),
-                        prog_id: human_readable.get(pid).unwrap().prog_id,
-                        prog_name: human_readable.get(pid).unwrap().prog_name.clone(),
-                        cmd: human_readable.get(pid).unwrap().cmd.clone(),
-                        args: human_readable.get(pid).unwrap().args.clone(),
-                    };
-                    delete_bin(log.prog_id.clone().to_string().into());
-                    logging(
-                        1,
-                        *pid,
-                        Some(duration),
-                        log,
-                        &mut human_readable,
-                        log_file.as_mut().unwrap(),
-                    );
-                }
+                let mut log = Log {
+                    start: Utc::now(),
+                    finish: None,
+                    duration: None,
+                    prog_id: PROG_COUNTER.fetch_add(1, Ordering::Relaxed),
+                    prog_name: get_prog_name(c.path),
+                    cmd: c.cmd.clone(),
+                    args: c.args.clone(),
+                };
+                // logging(0, log.clone(), human_readable, log_file);
+                let full_log = single_run(&current_prog, &mut log);
+                logging(1, full_log, human_readable, log_file);
+                delete_bin(log.prog_id.clone().to_string().into());
             });
-            pid_vec.clear();
-
-            // trace!("program {:?} finished", pid);
-            // trace!("program {:?} ran for {:?}", pid, duration);
-            // trace!("inserting program {:?} into logger", prog_counter);
-            // logger.insert(prog_counter, duration); // TODO: add start and end time to the logger, and print it into the file
+            // pool.join();
+            // let sleep_dur = time::Duration::from_secs(1);
+            // thread::sleep(sleep_dur); // FIXME: having some issues below, using this for now
+        } else {
+            warn!("program queue is not empty, sleep for 1 sec");
+            let sleep_dur = time::Duration::from_secs(1);
+            thread::sleep(sleep_dur); // FIXME: having some issues below, using this for now
+                                      // pool.join();
         }
     }
-    // logger
-    human_readable
+    let h = human_readable.lock().unwrap();
+    h.to_vec()
 }
 
 #[inline(always)]
-fn single_run(program: &mut Program, file_name: u32) -> std::process::Child {
-    // let mut program = program.clone();
-    // let Some(path) = program.path else {
-    //     panic!("program path is not specified");
-    // };
-    // println!("{:?}", program.path);
+fn single_run(program: &Program, unfinished_log: &mut Log) -> Log {
+    let file_name = unfinished_log.prog_id;
     let prog_path = program.path.clone();
     if !std::env::current_dir()
         .unwrap()
@@ -226,8 +131,8 @@ fn single_run(program: &mut Program, file_name: u32) -> std::process::Child {
     {
         assert!(std::env::set_current_dir(prog_path.unwrap()).is_ok());
     }
-    // let mut fixed_args = Vec::new();
-    for str in program.args.as_mut().unwrap_or(&mut Vec::new()) {
+    let mut fixed_args = Vec::new();
+    for str in program.args.clone().as_mut().unwrap_or(&mut Vec::new()) {
         let re = Regex::new(r"\=\*").unwrap();
         let file_re = Regex::new(r"file_name\=\*").unwrap();
         let rand =
@@ -235,22 +140,49 @@ fn single_run(program: &mut Program, file_name: u32) -> std::process::Child {
         if file_re.is_match(str) {
             // debug!("file_name is matched");
             // debug!("file_name: {:?}", file_name);
-            *str = file_re
-                .replace_all(str, format!("file_name={}", file_name).as_str())
-                .to_string();
-            continue;
+            fixed_args.push(
+                file_re
+                    .replace_all(str, format!("file_name={}", file_name).as_str())
+                    .to_string(),
+            );
+            // continue;
+            // debug!("str after file re {:?}", str);
         } else {
-            *str = re
-                .replace_all(str, format!("={}", rand).as_str())
-                .to_string(); // TODO: this may need an iter to loop through all=* args to give different random numbers for different args
-                              // println!("{}", str);
+            fixed_args.push(
+                re.replace_all(str, format!("={}", rand).as_str())
+                    .to_string(),
+            ); // TODO: this may need an iter to loop through all=* args to give different random numbers for different args
+               // println!("{}", str);
+               // debug!("str after num re {:?}", str);
         }
     }
+    // debug!("command args after mod is: {:?}", fixed_args.clone());
 
-    std::process::Command::new(program.cmd.as_ref().unwrap())
-        .args(program.args.as_ref().unwrap())
+    if let Ok(mut child) = std::process::Command::new(program.cmd.as_ref().unwrap())
+        .args(fixed_args.clone())
         .spawn()
-        .expect("failed to execute child")
+    {
+        debug!("spawned the child process");
+        child.wait().expect("command wasn't running");
+        info!("Child has finished its execution!");
+    } else {
+        debug!("child command didn't start");
+    }
+
+    // std::process::Command::new(program.cmd.as_ref().unwrap())
+    //     .args(fixed_args.clone())
+    //     .output()
+    //     .expect("error on child command");
+
+    let finish_time = Utc::now();
+    let duration = (finish_time - unfinished_log.start).num_milliseconds();
+
+    // FIXME: this might be wrong since unfinished_log is not &mut
+    unfinished_log.finish = Some(finish_time);
+    unfinished_log.duration = Some(duration);
+    unfinished_log.args = Some(fixed_args);
+
+    unfinished_log.to_owned()
 }
 
 #[cfg(test)]

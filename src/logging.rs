@@ -1,15 +1,16 @@
 use chrono::{DateTime, Utc};
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
+use std::sync::Arc;
+use std::sync::Mutex;
 use tracing::{info, trace};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Log {
     pub(crate) start: DateTime<Utc>,
     pub(crate) finish: Option<DateTime<Utc>>,
-    pub(crate) duration: Option<std::time::Duration>,
-    pub(crate) prog_id: u32,
+    pub(crate) duration: Option<i64>,
+    pub(crate) prog_id: u64,
     pub(crate) prog_name: String,
     pub(crate) cmd: Option<String>,
     pub(crate) args: Option<Vec<String>>,
@@ -17,12 +18,13 @@ pub struct Log {
 
 pub fn logging(
     current_prog_status: usize,
-    pid: u32,
-    curr_duration: Option<std::time::Duration>,
     curr_prog_log: Log,
-    total_log: &mut HashMap<u32, Log>,
-    log_file: &mut File,
+    total_log: Arc<Mutex<Vec<Log>>>,
+    log_file: Arc<Mutex<Result<File, std::io::Error>>>,
 ) {
+    let mut total_log = total_log.lock().unwrap();
+    let log_file = log_file.lock().unwrap();
+    let mut log_file = log_file.as_ref().unwrap();
     match current_prog_status {
         0 => {
             // 0 for start
@@ -49,31 +51,33 @@ pub fn logging(
         1 => {
             // 1 for finish
             trace!(
-                "program {:?}(prog_id: {:?}) finished with {:?} args at {:?} time, used {:?} sec",
+                "program {:?}(prog_id: {:?}) started at{:?}, finished with {:?} args at {:?} time, used {:?} mili sec",
                 curr_prog_log.prog_name,
                 curr_prog_log.prog_id,
+                curr_prog_log.start,
                 curr_prog_log.args,
                 curr_prog_log.finish.unwrap(),
-                curr_duration.unwrap().as_secs()
+                curr_prog_log.duration
             );
             log_file
                 .write_all(
                     format!(
-                        "program {:?}(prog_id: {:?}) finished with {:?} args at {:?} time, used {:?} sec\n",
+                        "program {:?}(prog_id: {:?}) started at{:?}, finished with {:?} args at {:?} time, used {:?} mili sec\n",
                         curr_prog_log.prog_name,
                         curr_prog_log.prog_id,
+                        curr_prog_log.start,
                         curr_prog_log.args,
                         curr_prog_log.finish.unwrap(),
-                        curr_duration.unwrap().as_secs()
+                        curr_prog_log.duration
                     )
                     .as_bytes(),
                 )
                 .unwrap();
+            total_log.push(curr_prog_log);
+            info!("all programs ran: {:#?}", total_log);
         }
         _ => {
             panic!("current program status unknown");
         }
     }
-    total_log.insert(pid, curr_prog_log);
-    info!("all programs ran: {:#?}", total_log);
 }

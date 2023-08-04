@@ -1,10 +1,12 @@
 #![feature(extract_if)]
+#![feature(thread_id_value)]
 
 use clap::Parser;
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 use tracing::{trace, Level};
 // use tracing_subscriber::fmt::writer::MakeWriterExt;
 
@@ -70,21 +72,21 @@ fn main() -> anyhow::Result<()> {
     let cpu_info = utils::get_cpu_info();
     // let cpu_info = 4;
     let command: Command = Command::parse();
-    let mut log_file = OpenOptions::new()
+    let log_file = OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .open("log");
     match command {
         Command::line_args(opt) => {
-            let program_pool = vec![corun::Program {
+            let program_pool = Arc::new(RwLock::new(vec![corun::Program {
                 cmd: opt.cmd,
                 path: opt.path,
                 range: Option::from(utils::get_range(opt.range)),
                 args: opt.args,
-            }];
+            }]));
             let duration = utils::get_duration(opt.duration);
-            let duration_hash = corun::co_run(program_pool, duration, cpu_info, &mut log_file);
+            let duration_hash = corun::co_run(program_pool, duration, cpu_info);
             trace!("total log: {:#?}", duration_hash);
             log_file
                 .unwrap()
@@ -98,7 +100,7 @@ fn main() -> anyhow::Result<()> {
                 .unwrap_or_else(|| panic!("config file path is not specified"));
             // get all the lines from the file
             let contents = fs::read_to_string(config_path)?;
-            let mut program_pool = Vec::new();
+            let program_pool = Arc::new(RwLock::new(Vec::new()));
             let duration = utils::get_duration(opt.duration);
 
             for line in contents.lines() {
@@ -127,9 +129,9 @@ fn main() -> anyhow::Result<()> {
                             .collect::<Vec<String>>(),
                     ),
                 };
-                program_pool.push(program);
+                program_pool.write().unwrap().push(program);
             }
-            let duration_hash = corun::co_run(program_pool, duration, cpu_info, &mut log_file);
+            let duration_hash = corun::co_run(program_pool, duration, cpu_info);
             trace!("total log: {:#?}", duration_hash);
             log_file
                 .unwrap()
