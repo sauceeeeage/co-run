@@ -1,4 +1,3 @@
-use std::fs::OpenOptions;
 // use std::io::Write;
 use std::path::PathBuf;
 // use clap::error::ContextValue::String;
@@ -61,30 +60,25 @@ pub fn co_run(
     let mut pool = ThreadPool::new(cpu_cnt);
     let timer_start = time::Instant::now();
     pool.set_num_threads(cpu_cnt);
-    let log_file = Arc::new(Mutex::new(
-        OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open("log"),
-    ));
+    // let log_file = Arc::new(Mutex::new(
+    //     OpenOptions::new()
+    //         .read(true)
+    //         .write(true)
+    //         .create(true)
+    //         .open("log"),
+    // ));
     while (timer_start.elapsed()) < total_dur {
-        // if pool.active_count() < cpu_cnt {
-
-        // }
-        let log_file = Arc::clone(&log_file);
+        // let log_file = Arc::clone(&log_file);
         let programs = Arc::clone(&programs);
         let human_readable = Arc::clone(&human_readable);
 
         if pool.queued_count() == 0 {
-            warn!("program queue was empty, adding new jobs");
+            warn!("program queue is empty, adding new jobs");
             info!("current queue size: {}", pool.queued_count());
             info!("current active threads: {}", pool.active_count());
             pool.execute(move || {
                 // FIXME: the problem maybe the lock issue, but i'm not sure
                 // FIXME: give subroutines Arc instead of aquiring the lock here(let those subroutines get the locks)
-                // let mut human_readable = human_readable.lock().unwrap();
-                // let mut log_file = log_file.lock().unwrap();
                 warn!("cpu is not fully utilized, launching more programs");
                 // let tid: u64 = thread::current().id().as_u64().into();
                 let c_programs = programs.read().unwrap();
@@ -104,7 +98,7 @@ pub fn co_run(
                 };
                 // logging(0, log.clone(), human_readable, log_file);
                 let full_log = single_run(&current_prog, &mut log);
-                logging(1, full_log, human_readable, log_file);
+                logging(1, full_log, human_readable);
                 delete_bin(log.prog_id.clone().to_string().into());
             });
             // pool.join();
@@ -117,6 +111,7 @@ pub fn co_run(
                                       // pool.join();
         }
     }
+    warn!("time's up! exiting...");
     let h = human_readable.lock().unwrap();
     h.to_vec()
 }
