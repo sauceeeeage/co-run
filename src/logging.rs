@@ -4,11 +4,11 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use tracing::trace;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Log {
     pub(crate) start: DateTime<Utc>,
     pub(crate) finish: Option<DateTime<Utc>>,
-    pub(crate) duration: Option<i64>,
+    pub(crate) duration: Option<f64>,
     pub(crate) prog_id: u64,
     pub(crate) prog_name: String,
     pub(crate) cmd: Option<String>,
@@ -45,7 +45,7 @@ pub fn logging(current_prog_status: usize, curr_prog_log: Log, total_log: Arc<Mu
         1 => {
             // 1 for finish
             trace!(
-                "program {:?}(prog_id: {:?}) started at{:?}, finished with {:?} args at {:?} time, used {:?} mili sec",
+                "program {:?}(prog_id: {:?}) started at{:?}, finished with {:?} args at {:?} time, used {:?} sec",
                 curr_prog_log.prog_name,
                 curr_prog_log.prog_id,
                 curr_prog_log.start,

@@ -28,6 +28,8 @@ use crate::utils::delete_bin;
 
 // TODO: concurrently launch programs, instead of like right now(one by one)
 
+// TODO: keep the floating point number instead of parse it into int!!!!
+
 static PROG_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -105,8 +107,8 @@ pub fn co_run(
             // let sleep_dur = time::Duration::from_secs(1);
             // thread::sleep(sleep_dur); // FIXME: having some issues below, using this for now
         } else {
-            warn!("program queue is not empty, sleep for 1 sec");
-            let sleep_dur = time::Duration::from_secs(1);
+            warn!("program queue is not empty, sleep for 10 ms");
+            let sleep_dur = time::Duration::from_millis(10);
             thread::sleep(sleep_dur); // FIXME: having some issues below, using this for now
                                       // pool.join();
         }
@@ -153,24 +155,37 @@ fn single_run(program: &Program, unfinished_log: &mut Log) -> Log {
     }
     // debug!("command args after mod is: {:?}", fixed_args.clone());
 
-    if let Ok(mut child) = std::process::Command::new(program.cmd.as_ref().unwrap())
-        .args(fixed_args.clone())
-        .spawn()
-    {
-        debug!("spawned the child process");
-        child.wait().expect("command wasn't running");
-        info!("Child has finished its execution!");
-    } else {
-        debug!("child command didn't start");
-    }
-
-    // std::process::Command::new(program.cmd.as_ref().unwrap())
+    // if let Ok(mut child) = std::process::Command::new(program.cmd.as_ref().unwrap())
     //     .args(fixed_args.clone())
-    //     .output()
-    //     .expect("error on child command");
+    //     .spawn()
+    // {
+    //     debug!("spawned the child process");
+    //     child.wait().expect("command wasn't running");
+    //     info!("Child has finished its execution!");
+    // } else {
+    //     debug!("child command didn't start");
+    // }
+
+    let output = std::process::Command::new(program.cmd.as_ref().unwrap())
+        .args(fixed_args.clone())
+        .output()
+        .expect("error on child command");
 
     let finish_time = Utc::now();
-    let duration = (finish_time - unfinished_log.start).num_milliseconds();
+    // let duration = (finish_time - unfinished_log.start).num_milliseconds();
+    let duration = output.stdout;
+    let s = match std::str::from_utf8(duration.as_slice()) {
+        Ok(v) => v,
+        Err(e) => panic!("Invalid UTF-8 sequence: {}", e),
+    };
+    let duration = s.lines().skip(1).next().unwrap().trim();
+
+    let duration = duration.parse::<f64>().unwrap_or_else(|e| {
+        panic!(
+            "failed to parse duration for program {}: {duration}",
+            file_name
+        )
+    });
 
     // FIXME: this might be wrong since unfinished_log is not &mut
     unfinished_log.finish = Some(finish_time);
